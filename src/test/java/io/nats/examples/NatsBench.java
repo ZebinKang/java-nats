@@ -30,12 +30,17 @@ import java.util.concurrent.Phaser;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+
+
 /**
  * A utility class for measuring NATS performance.
  */
 public class NatsBench {
 
     final BlockingQueue<Throwable> errorQueue = new LinkedBlockingQueue<Throwable>();
+    final int TIME_SLICE=1000;
 
     // Default test values
     private int numMsgs = 100000;
@@ -85,6 +90,7 @@ public class NatsBench {
             opts = new Options.Builder(Nats.defaultOptions()).noReconnect().build();
         }
     }
+
 
     /**
      * Properties-based constructor for NatsBench.
@@ -165,10 +171,16 @@ public class NatsBench {
 
             final long start = System.nanoTime();
             Subscription sub = nc.subscribe(subject, new MessageHandler() {
+                private Payload convertor=new Payload(size);
+                private long[] timeSlots=new long[numMsgs];
+                private int i=0;
                 @Override
-                public void onMessage(Message msg) {
+                public void onMessage(Message msg)  {
                     received.incrementAndGet();
+                    timeSlots[i] = System.nanoTime() - convertor.extractTime(msg.getData());
+                    i += 1;
                     if (received.get() >= numMsgs) {
+                        concludeData(timeSlots,"latency/subTime.csv");
                         bench.addSubSample(new Sample(numMsgs, size, start, System.nanoTime(), nc));
                         phaser.arrive();
                         nc.setDisconnectedCallback(null);
@@ -203,24 +215,51 @@ public class NatsBench {
 
         public void runPublisher() throws Exception {
             try (Connection nc = Nats.connect(urls, opts)) {
-                byte[] payload = null;
-                if (size > 0) {
-                    payload = new byte[size];
-                }
-
+                Payload convertor=new Payload(size);
                 final long start = System.nanoTime();
 
+                long[] timeSlots=new long[numMsgs+1];
+
                 for (int i = 0; i < numMsgs; i++) {
+                    timeSlots[i]=System.nanoTime();
                     sent.incrementAndGet();
-                    nc.publish(subject, payload);
+                    nc.publish(subject, convertor.preparePayload());
                 }
+                timeSlots[numMsgs]=System.nanoTime();
                 nc.flush();
                 bench.addPubSample(new Sample(numMsgs, size, start, System.nanoTime(), nc));
                 Statistics s = nc.getStats();
                 System.out.println("NATS publish connection statistics:");
                 System.out.printf("   Bytes out: %d\n", s.getOutBytes());
                 System.out.printf("   Msgs  out: %d\n", s.getOutMsgs());
+                for(int i=0;i<numMsgs;i+=1){
+                    timeSlots[i]=timeSlots[i+1]-timeSlots[i];
+                }
+                concludeData(timeSlots,"latency/pubTime.csv");
             }
+        }
+    }
+
+    public void concludeData(long[] timeSlots, String fileName){
+        Arrays.sort(timeSlots);
+        int numMsgsForEachSlice=numMsgs/TIME_SLICE;
+        int indexWithinSlice=0;
+        int indexOfSlice=0;
+        try (BufferedWriter bw = new BufferedWriter(new FileWriter(fileName))) {
+
+            bw.write("Index,Latency\n");
+            for(int i=0;i<numMsgs;i+=1){
+                indexWithinSlice+=1;
+                if(indexWithinSlice==numMsgsForEachSlice){
+                    indexOfSlice+=1;
+                    bw.write(indexOfSlice+","+timeSlots[i-numMsgsForEachSlice+1]+"\n");
+                    indexWithinSlice=0;
+                }
+            }
+        } catch (IOException e) {
+
+            e.printStackTrace();
+
         }
     }
 
