@@ -30,9 +30,6 @@ import java.util.concurrent.Phaser;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import java.io.BufferedWriter;
-import java.io.FileWriter;
-
 
 /**
  * A utility class for measuring NATS performance.
@@ -40,7 +37,6 @@ import java.io.FileWriter;
 public class NatsBench {
 
     final BlockingQueue<Throwable> errorQueue = new LinkedBlockingQueue<Throwable>();
-    final int TIME_SLICE=1000;
 
     // Default test values
     private int numMsgs = 100000;
@@ -117,11 +113,13 @@ public class NatsBench {
         final Phaser phaser;
         final int num;
         final int size;
+        final int workerIndex;
 
-        Worker(Phaser phaser, int numMsgs, int size) {
+        Worker(Phaser phaser, int numMsgs, int size, int i) {
             this.phaser = phaser;
             this.num = numMsgs;
             this.size = size;
+            workerIndex=i;
         }
 
         @Override
@@ -130,8 +128,8 @@ public class NatsBench {
     }
 
     class SubWorker extends Worker {
-        SubWorker(Phaser phaser, int numMsgs, int size) {
-            super(phaser, numMsgs, size);
+        SubWorker(Phaser phaser, int numMsgs, int size,int subIndex) {
+            super(phaser, numMsgs, size,subIndex);
         }
 
         @Override
@@ -170,17 +168,13 @@ public class NatsBench {
             });
 
             final long start = System.nanoTime();
-            Subscription sub = nc.subscribe(subject, new MessageHandler() {
-                private Payload convertor=new Payload(size);
-                private long[] timeSlots=new long[numMsgs];
-                private int i=0;
+            Subscription sub = nc.subscribe(subject+workerIndex, new MessageHandler() {
+                private Payload payload =new Payload(size);
                 @Override
                 public void onMessage(Message msg)  {
                     received.incrementAndGet();
-                    timeSlots[i] = System.nanoTime() - convertor.extractTime(msg.getData());
-                    i += 1;
-                    if (received.get() >= numMsgs) {
-                        concludeData(timeSlots,"latency/subTime.csv");
+                    bench.addSubLatency(workerIndex,System.nanoTime() - payload.extractTime(msg.getData()));
+                    if (payload.extractMsgIndex(msg.getData()) >= numMsgs) {
                         bench.addSubSample(new Sample(numMsgs, size, start, System.nanoTime(), nc));
                         phaser.arrive();
                         nc.setDisconnectedCallback(null);
@@ -198,8 +192,8 @@ public class NatsBench {
     }
 
     class PubWorker extends Worker {
-        PubWorker(Phaser phaser, int numMsgs, int size) {
-            super(phaser, numMsgs, size);
+        PubWorker(Phaser phaser, int numMsgs, int size,int pubIndex) {
+            super(phaser, numMsgs, size,pubIndex);
         }
 
         @Override
@@ -215,53 +209,26 @@ public class NatsBench {
 
         public void runPublisher() throws Exception {
             try (Connection nc = Nats.connect(urls, opts)) {
-                Payload convertor=new Payload(size);
+                Payload payload=new Payload(size);
                 final long start = System.nanoTime();
-
-                long[] timeSlots=new long[numMsgs+1];
+                long previousTime;
 
                 for (int i = 0; i < numMsgs; i++) {
-                    timeSlots[i]=System.nanoTime();
+                    previousTime=System.nanoTime();
                     sent.incrementAndGet();
-                    nc.publish(subject, convertor.preparePayload());
+                    nc.publish(subject+workerIndex, payload.preparePayload(i+1));
+                    bench.addPubLatency(workerIndex,System.nanoTime()-previousTime);
                 }
-                timeSlots[numMsgs]=System.nanoTime();
                 nc.flush();
                 bench.addPubSample(new Sample(numMsgs, size, start, System.nanoTime(), nc));
                 Statistics s = nc.getStats();
                 System.out.println("NATS publish connection statistics:");
                 System.out.printf("   Bytes out: %d\n", s.getOutBytes());
                 System.out.printf("   Msgs  out: %d\n", s.getOutMsgs());
-                for(int i=0;i<numMsgs;i+=1){
-                    timeSlots[i]=timeSlots[i+1]-timeSlots[i];
-                }
-                concludeData(timeSlots,"latency/pubTime.csv");
             }
         }
     }
 
-    public void concludeData(long[] timeSlots, String fileName){
-        Arrays.sort(timeSlots);
-        int numMsgsForEachSlice=numMsgs/TIME_SLICE;
-        int indexWithinSlice=0;
-        int indexOfSlice=0;
-        try (BufferedWriter bw = new BufferedWriter(new FileWriter(fileName))) {
-
-            bw.write("Index,Latency\n");
-            for(int i=0;i<numMsgs;i+=1){
-                indexWithinSlice+=1;
-                if(indexWithinSlice==numMsgsForEachSlice){
-                    indexOfSlice+=1;
-                    bw.write(indexOfSlice+","+timeSlots[i-numMsgsForEachSlice+1]+"\n");
-                    indexWithinSlice=0;
-                }
-            }
-        } catch (IOException e) {
-
-            e.printStackTrace();
-
-        }
-    }
 
     /**
      * Runs the benchmark.
@@ -276,12 +243,12 @@ public class NatsBench {
 
         phaser.register();
 
-        bench = new Benchmark("NATS", numSubs, numPubs);
+        bench = new Benchmark("NATS", numSubs, numPubs,numMsgs);
 
         // Run Subscribers first
         for (int i = 0; i < numSubs; i++) {
             phaser.register();
-            exec.execute(new SubWorker(phaser, numMsgs, size));
+            exec.execute(new SubWorker(phaser, numMsgs, size,i));
         }
 
         // Wait for subscribers threads to initialize
@@ -290,7 +257,7 @@ public class NatsBench {
         // Now publishers
         for (int i = 0; i < numPubs; i++) {
             phaser.register();
-            exec.execute(new PubWorker(phaser, numMsgs, size));
+            exec.execute(new PubWorker(phaser, numMsgs, size,i));
         }
 
         System.out.printf("Starting benchmark [msgs=%d, msgsize=%d, pubs=%d, subs=%d]\n", numMsgs,

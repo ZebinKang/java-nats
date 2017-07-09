@@ -7,7 +7,12 @@
 package io.nats.benchmark;
 
 import io.nats.client.NUID;
+
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -16,19 +21,22 @@ import java.util.concurrent.LinkedBlockingQueue;
  * A utility class for collecting and calculating benchmark metrics.
  */
 public class Benchmark extends Sample {
+    private final int TIME_SLICE=1000;
     private String name = null;
     private String runId = null;
     private final SampleGroup pubs = new SampleGroup();
     private final SampleGroup subs = new SampleGroup();
     private BlockingQueue<Sample> pubChannel;
     private BlockingQueue<Sample> subChannel;
+    private int numMsgs;
+    private long[] pubTimeSlots;
+    private long[] subTimeSlots;
+    private int[] pubSlotIndex;
+    private int[] subSlotIndex;
 
-    public Benchmark() {
-        // TODO Auto-generated constructor stub
-    }
 
-    public Benchmark(String name, int subCnt, int pubCnt) {
-        this(name, NUID.nextGlobal(), subCnt, pubCnt);
+    public Benchmark(String name, int subCnt, int pubCnt, int numMsgs) {
+        this(name, NUID.nextGlobal(), subCnt, pubCnt, numMsgs);
     }
 
     /**
@@ -36,15 +44,19 @@ public class Benchmark extends Sample {
      * collecting samples, call endBenchmark.
      *
      * @param name   a descriptive name for this test run
-     * @param runId  a unique id for this test run (typically a guid)
      * @param subCnt the number of subscribers
      * @param pubCnt the number of publishers
      */
-    public Benchmark(String name, String runId, int subCnt, int pubCnt) {
+    public Benchmark(String name, String runId, int subCnt, int pubCnt,int num) {
         this.name = name;
         this.runId = runId;
         this.subChannel = new LinkedBlockingQueue<Sample>();
         this.pubChannel = new LinkedBlockingQueue<Sample>();
+        numMsgs=num;
+        subTimeSlots=new long[subCnt*num];
+        pubTimeSlots=new long[pubCnt*num];
+        subSlotIndex=new int[subCnt];
+        pubSlotIndex=new int[pubCnt];
     }
 
     public final void addPubSample(Sample sample) {
@@ -53,6 +65,16 @@ public class Benchmark extends Sample {
 
     public final void addSubSample(Sample sample) {
         subChannel.add(sample);
+    }
+
+    public final void addPubLatency(int pubIndex, long latency) {
+        pubTimeSlots[pubSlotIndex[pubIndex]+numMsgs*pubIndex]=latency;
+        pubSlotIndex[pubIndex]+=1;
+    }
+
+    public final void addSubLatency(int subIndex, long latency) {
+        subTimeSlots[subSlotIndex[subIndex]+numMsgs*subIndex]=latency;
+        subSlotIndex[subIndex]+=1;
     }
 
     /**
@@ -89,6 +111,7 @@ public class Benchmark extends Sample {
      * @return the report as a String.
      */
     public final String report() {
+        reportLatency();
         StringBuilder sb = new StringBuilder();
         String indent = "";
         if (pubs.hasSamples() && subs.hasSamples()) {
@@ -173,5 +196,34 @@ public class Benchmark extends Sample {
 
     public final SampleGroup getSubs() {
         return subs;
+    }
+
+    private void reportLatency(){
+        if(pubSlotIndex.length>0)
+            exportLatencyData(pubTimeSlots,"latency/pubTime.csv");
+        if(subSlotIndex.length>0)
+            exportLatencyData(subTimeSlots,"latency/subTime.csv");
+    }
+
+    private void exportLatencyData(long[] timeSlots, String fileName) {
+        Arrays.sort(timeSlots);
+        int numMsgsForEachSlice = timeSlots.length / TIME_SLICE;
+        int indexWithinSlice = 0;
+        int indexOfSlice = 0;
+        try (BufferedWriter bw = new BufferedWriter(new FileWriter(fileName))) {
+            bw.write("Index,Latency\n");
+            for (int i = 0; i < numMsgs; i += 1) {
+                indexWithinSlice += 1;
+                if (indexWithinSlice == numMsgsForEachSlice) {
+                    indexOfSlice += 1;
+                    bw.write(indexOfSlice + "," + timeSlots[i - numMsgsForEachSlice + 1] + "\n");
+                    indexWithinSlice = 0;
+                }
+            }
+        } catch (IOException e) {
+
+            e.printStackTrace();
+
+        }
     }
 }

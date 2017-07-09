@@ -189,7 +189,7 @@ public class BenchmarkFunctionalTest {
 
     @Test
     public void testBenchSetup() {
-        Benchmark bench = new Benchmark("test", 1, 1);
+        Benchmark bench = new Benchmark("test", 1, 1, 1000);
         bench.addPubSample(millionMessagesSecondSample(1));
         bench.addSubSample(millionMessagesSecondSample(1));
         bench.close();
@@ -210,7 +210,7 @@ public class BenchmarkFunctionalTest {
      * @return the created Benchmark
      */
     private Benchmark makeBench(int subs, int pubs) {
-        Benchmark bench = new Benchmark("test", subs, pubs);
+        Benchmark bench = new Benchmark("test", subs, pubs, 1000);
         for (int i = 0; i < subs; i++) {
             bench.addSubSample(millionMessagesSecondSample(1));
         }
