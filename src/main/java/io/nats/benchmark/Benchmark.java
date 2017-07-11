@@ -21,7 +21,6 @@ import java.util.concurrent.LinkedBlockingQueue;
  * A utility class for collecting and calculating benchmark metrics.
  */
 public class Benchmark extends Sample {
-    private final int TIME_SLICE=1000;
     private String name = null;
     private String runId = null;
     private final SampleGroup pubs = new SampleGroup();
@@ -35,9 +34,6 @@ public class Benchmark extends Sample {
     private int[] subSlotIndex;
 
 
-    public Benchmark(String name, int subCnt, int pubCnt, int numMsgs) {
-        this(name, NUID.nextGlobal(), subCnt, pubCnt, numMsgs);
-    }
 
     /**
      * Initializes a Benchmark. After creating a bench call addSubSample/addPubSample. When done
@@ -47,9 +43,8 @@ public class Benchmark extends Sample {
      * @param subCnt the number of subscribers
      * @param pubCnt the number of publishers
      */
-    public Benchmark(String name, String runId, int subCnt, int pubCnt,int num) {
+    public Benchmark(String name, int subCnt, int pubCnt,int num) {
         this.name = name;
-        this.runId = runId;
         this.subChannel = new LinkedBlockingQueue<Sample>();
         this.pubChannel = new LinkedBlockingQueue<Sample>();
         numMsgs=num;
@@ -207,12 +202,13 @@ public class Benchmark extends Sample {
 
     private void exportLatencyData(long[] timeSlots, String fileName) {
         Arrays.sort(timeSlots);
+        int TIME_SLICE = 1000;
         int numMsgsForEachSlice = timeSlots.length / TIME_SLICE;
         int indexWithinSlice = 0;
         int indexOfSlice = 0;
         try (BufferedWriter bw = new BufferedWriter(new FileWriter(fileName))) {
             bw.write("Index,Latency\n");
-            for (int i = 0; i < numMsgs; i += 1) {
+            for (int i = 0; i < timeSlots.length; i += 1) {
                 indexWithinSlice += 1;
                 if (indexWithinSlice == numMsgsForEachSlice) {
                     indexOfSlice += 1;

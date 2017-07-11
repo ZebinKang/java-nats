@@ -40,7 +40,7 @@ public class NatsBench {
 
     // Default test values
     private int numMsgs = 100000;
-    private int numPubs = 1;
+    private int numPubs = 0;
     private int numSubs = 0;
     private int size = 128;
 
@@ -170,11 +170,21 @@ public class NatsBench {
             final long start = System.nanoTime();
             Subscription sub = nc.subscribe(subject+workerIndex, new MessageHandler() {
                 private Payload payload =new Payload(size);
+                private long currTime=0;
+                private long i=0;
                 @Override
                 public void onMessage(Message msg)  {
+                    currTime=System.currentTimeMillis();
                     received.incrementAndGet();
-                    bench.addSubLatency(workerIndex,System.nanoTime() - payload.extractTime(msg.getData()));
-                    if (payload.extractMsgIndex(msg.getData()) >= numMsgs) {
+                    bench.addSubLatency(workerIndex,currTime - payload.extractTime(msg.getData()));
+                    i=payload.extractMsgIndex(msg.getData());
+                    if(i%(numMsgs/100)==0&&workerIndex==numSubs-1) {
+                        System.out.println("sub"+workerIndex + ":" + i / (numMsgs / 100));
+                        System.out.println(payload.extractTime(msg.getData()));
+                        System.out.println(currTime);
+
+                    }
+                    if (payload.extractMsgIndex(msg.getData())+1 >= numMsgs) {
                         bench.addSubSample(new Sample(numMsgs, size, start, System.nanoTime(), nc));
                         phaser.arrive();
                         nc.setDisconnectedCallback(null);
@@ -211,13 +221,21 @@ public class NatsBench {
             try (Connection nc = Nats.connect(urls, opts)) {
                 Payload payload=new Payload(size);
                 final long start = System.nanoTime();
-                long previousTime;
+                long previousTime=System.nanoTime();
+                long currTime;
+                long currMillis;
 
                 for (int i = 0; i < numMsgs; i++) {
-                    previousTime=System.nanoTime();
                     sent.incrementAndGet();
-                    nc.publish(subject+workerIndex, payload.preparePayload(i+1));
-                    bench.addPubLatency(workerIndex,System.nanoTime()-previousTime);
+                    previousTime=System.nanoTime();
+                    currMillis=System.currentTimeMillis();
+                    nc.publish(subject+workerIndex, payload.preparePayload(i,currMillis));
+                    currTime=System.nanoTime();
+                    bench.addPubLatency(workerIndex,currTime-previousTime);
+                    if(i%(numMsgs/100)==0&&workerIndex==numPubs-1) {
+                        System.out.println("pub"+workerIndex + ":" + i / (numMsgs / 100));
+                        System.out.println(currMillis);
+                    }
                 }
                 nc.flush();
                 bench.addPubSample(new Sample(numMsgs, size, start, System.nanoTime(), nc));
@@ -256,6 +274,7 @@ public class NatsBench {
 
         // Now publishers
         for (int i = 0; i < numPubs; i++) {
+            System.out.println(i);
             phaser.register();
             exec.execute(new PubWorker(phaser, numMsgs, size,i));
         }

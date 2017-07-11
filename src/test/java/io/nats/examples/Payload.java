@@ -11,8 +11,8 @@ public class Payload {
         buffer=ByteBuffer.allocate(Long.SIZE/Byte.SIZE);
     }
 
-    public byte[] preparePayload(long msgIndex) {
-        buffer.putLong(0, System.nanoTime());
+    public byte[] preparePayload(long msgIndex,long currTime) {
+        buffer.putLong(0, currTime);
         for(int i=0;i<buffer.capacity();i++){
             payload[i]=buffer.get(i);
         }
